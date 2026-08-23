@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vista Fleet Command</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/spark-md5/3.0.2/spark-md5.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --sidebar-bg: #0b1120;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #3b82f6;
+            --online: #10b981;
+            --offline: #ef4444;
+            --updating: #f59e0b;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .sidebar { width: 260px; background-color: var(--sidebar-bg); border-right: 1px solid #334155; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
+        .sidebar h2 { font-size: 16px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 20px;}
+        
+        .zone-btn { background: transparent; color: var(--text-main); border: 1px solid #334155; padding: 10px 15px; border-radius: 6px; text-align: left; cursor: pointer; margin-bottom: 10px; transition: all 0.2s; font-weight: bold; }
+        .zone-btn:hover { background: #1e293b; }
+        .zone-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+        .main-content { flex: 1; padding: 20px 30px; overflow-y: auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid #334155; margin-bottom: 30px; }
+        .header h1 { margin: 0; font-size: 24px; letter-spacing: 1px;}
+        .connection-status { font-size: 14px; font-weight: bold; color: var(--offline); }
+
+        #device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+
+        .node-card { background-color: var(--card-bg); border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border-top: 4px solid var(--text-dim); transition: transform 0.2s, opacity 0.3s ease-out; }
+        .node-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; }
+        .node-title { font-size: 18px; font-weight: bold; margin: 0; }
+        
+        .node-mac { font-size: 12px; color: var(--text-dim); margin-top: 4px; font-family: monospace; display: flex; align-items: center; gap: 8px; }
+        .fw-badge { color: var(--accent); font-weight: bold; font-size: 11px; background: rgba(59, 130, 246, 0.1); padding: 2px 6px; border-radius: 4px; }
+        
+        .zone-tag { display: inline-block; background: #334155; color: #cbd5e1; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-top: 6px; letter-spacing: 0.5px;}
+        .badge { padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+        .stat-box { background-color: #0f172a; padding: 10px; border-radius: 6px; }
+        .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+        .stat-value { font-size: 16px; font-weight: bold; margin-top: 4px; font-family: monospace;}
+
+        .control-panel { border-top: 1px solid #334155; padding-top: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .btn-group { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+        .btn { background-color: var(--accent); color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; }
+        .btn-danger { background-color: transparent; border: 1px solid var(--offline); color: var(--offline); }
+        .btn-danger:hover { background-color: var(--offline); color: white; }
+        .btn-warning { background-color: transparent; border: 1px solid var(--updating); color: var(--updating); }
+        .btn-warning:hover { background-color: var(--updating); color: white; }
+
+        .progress-wrapper { background: #334155; border-radius: 4px; height: 16px; margin-top: 10px; margin-bottom: 5px; overflow: hidden; display: none; }
+        .progress-bar { background: var(--updating); height: 100%; width: 0%; font-size: 10px; text-align: center; line-height: 16px; color: #fff; font-weight: bold; transition: width 0.3s ease-out, background-color 0.3s; }
+
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; overflow-y: auto; padding-bottom: 50px; }
+        .modal-content { background: var(--card-bg); width: 90%; max-width: 800px; margin: 50px auto; padding: 25px; border-radius: 8px; position: relative; border-top: 4px solid var(--accent); box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+        .modal-content.small { max-width: 500px; border-top-color: var(--updating); }
+        .close-modal { position: absolute; right: 20px; top: 20px; font-size: 28px; font-weight: bold; cursor: pointer; color: var(--text-dim); line-height: 1; }
+        .close-modal:hover { color: white; }
+        
+        .modal-cmd-row { display: flex; flex-direction: column; gap: 15px; margin-top: 20px; margin-bottom: 25px; }
+        .modal-cmd-row input { padding: 12px; border-radius: 4px; border: 1px solid #334155; background: #0f172a; color: white; font-size: 14px; transition: border 0.2s; }
+        .modal-cmd-row input:focus { outline: none; border-color: var(--accent); }
+        
+        .log-box { background: #000; color: #10b981; font-family: monospace; height: 350px; overflow-y: scroll; padding: 15px; border-radius: 6px; font-size: 13px; line-height: 1.5; border: 1px solid #334155; margin-top: 10px; }
+        .log-topic { color: #3b82f6; font-weight: bold; }
+        .log-time { color: #64748b; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h1 style="font-size: 20px; margin-top: 0; margin-bottom: 30px; letter-spacing: 1px;">VISTA<br><span style="color:var(--accent)">SYSTEMS</span></h1>
+        <h2>Fleet Zones</h2>
+        <div id="zone-filter-container">
+            <button class="zone-btn active" id="btn-zone-all" onclick="filterByZone('all')">🌐 All Nodes</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="header">
+            <h1 id="current-view-title">Overview: All Nodes</h1>
+            <div id="broker-status" class="connection-status">Connecting...</div>
+        </div>
+        <div id="device-grid"></div>
+    </div>
+
+    <div id="nodeModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeConsoleModal()" title="Close">&times;</span>
+            <h2 id="modalTitle" style="margin-top: 0; color: white;">Device Console</h2>
+            <p style="color: var(--text-dim); margin-top: -5px; font-size: 14px;">
+                <strong>Listening on:</strong> <span id="topicList" style="font-family: monospace; color: #fff;"></span>
+            </p>
+
+            <div class="modal-cmd-row" style="flex-direction: row;">
+                <input type="text" id="customCmd" placeholder="Enter custom MQTT payload (e.g., RELAY_1_ON, RESTART)" style="flex: 1;">
+                <button class="btn" style="padding: 12px 20px; font-size: 14px;" onclick="sendCustomCommand()">Send</button>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                <h3 style="margin: 0; font-size: 16px;">Live Traffic & History</h3>
+                <button class="btn btn-danger" onclick="clearLogs()" style="padding: 6px 12px;">Clear Logs</button>
+            </div>
+            <div id="liveLogs" class="log-box"></div>
+        </div>
+    </div>
+
+    <div id="otaModal" class="modal">
+        <div class="modal-content small">
+            <span class="close-modal" onclick="closeOtaModal()" title="Close">&times;</span>
+            <h2 style="margin-top: 0; color: white;">Push Firmware Update</h2>
+            <p style="color: var(--text-dim); margin-top: -5px; font-size: 14px;">
+                Target: <strong id="otaTargetName" style="color: #fff;">--</strong> (<span id="otaTargetMac" style="font-family: monospace;"></span>)
+            </p>
+
+            <div class="modal-cmd-row">
+                <label style="font-size: 12px; color: var(--text-dim); margin-bottom: -10px;">Server Base URL (Auto-Saved)</label>
+                <input type="text" id="modalOtaBaseUrl" placeholder="e.g., https://my-server.com/firmware/">
+                
+                <label style="font-size: 12px; color: var(--text-dim); margin-bottom: -10px; margin-top: 5px;">Firmware Link & Checksum</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="modalOtaUrl" placeholder="Final Firmware URL" style="flex: 1;">
+                    <input type="text" id="modalOtaMd5" class="input-md5" placeholder="Drop .bin file here" style="flex: 1;">
+                </div>
+                
+                <button class="btn" style="padding: 14px; font-size: 14px; background-color: var(--updating); margin-top: 10px;" onclick="sendOTAFromModal()">Deploy Over-The-Air</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const brokerUrl = 'wss://156bc95c062b419ebc9d9543b732d0f5.s1.eu.hivemq.cloud:8884/mqtt';
+        const options = {
+            clientId: 'vista_dashboard_' + Math.random().toString(16).substr(2, 8),
+            username: 'kasun',
+            password: 'kasua1U23'
+        };
+
+        const client = mqtt.connect(brokerUrl, options);
+        let activeMacForConsole = null; 
+        let activeMacForOta = null;
+        
+        let knownZones = new Set();
+        let currentActiveZone = 'all';
+
+        // --- NEW: Load saved Base URL on startup and save dynamically ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedBaseUrl = localStorage.getItem('vista_ota_base_url') || '';
+            const baseUrlInput = document.getElementById('modalOtaBaseUrl');
+            if (baseUrlInput) {
+                baseUrlInput.value = savedBaseUrl;
+                baseUrlInput.addEventListener('input', (e) => {
+                    localStorage.setItem('vista_ota_base_url', e.target.value.trim());
+                });
+            }
+        });
+
+        client.on('connect', () => {
+            document.getElementById('broker-status').innerText = '🟢 Connected';
+            document.getElementById('broker-status').style.color = 'var(--online)';
+            client.subscribe('nodes/+/status');
+            client.subscribe('nodes/+/telemetry');
+        });
+
+        client.on('message', (topic, message) => {
+            const payload = message.toString();
+            const topicParts = topic.split('/');
+            if (topicParts.length < 3) return;
+
+            const mac = topicParts[1];
+            const type = topicParts[2];
+            
+            if (activeMacForConsole === mac) {
+                const logs = document.getElementById('liveLogs');
+                const timeStr = new Date().toLocaleTimeString();
+                const logEntry = `<span class="log-time">[${timeStr}]</span> <span class="log-topic">${topic}</span> : ${payload}`;
+                logs.innerHTML += (logs.innerHTML ? '<br>' : '') + logEntry;
+                logs.scrollTop = logs.scrollHeight;
+                saveCommandToHistory(mac, topic, payload);
+            }
+
+            if (type === 'status' || type === 'telemetry') {
+                ensureCardExists(mac);
+                document.getElementById(`time-${mac}`).innerText = new Date().toLocaleTimeString();
+
+                if (type === 'status') {
+                    updateStatusUI(mac, payload);
+                } else if (type === 'telemetry') {
+                    try { 
+                        const parsedData = JSON.parse(payload);
+                        updateTelemetryUI(mac, parsedData); 
+                        
+                        if (parsedData.zone) {
+                            registerZone(parsedData.zone);
+                        }
+                    } catch(e) {}
+                }
+            }
+        });
+
+        function ensureCardExists(mac) {
+            if (document.getElementById(`card-${mac}`)) return;
+            const grid = document.getElementById('device-grid');
+            
+            grid.insertAdjacentHTML('beforeend', `
+                <div id="card-${mac}" class="node-card" data-zone="unknown">
+                    <div class="node-header">
+                        <div>
+                            <h3 id="name-${mac}" class="node-title">Detecting...</h3>
+                            <div class="node-mac">
+                                ${mac} <span id="fw-${mac}" class="fw-badge">v--</span>
+                            </div>
+                            <div id="zone-tag-${mac}" class="zone-tag">ZONE: UNKNOWN</div>
+                        </div>
+                        <span id="badge-${mac}" class="badge" style="background-color:var(--text-dim)">UNKNOWN</span>
+                    </div>
+                    
+                    <div class="progress-wrapper" id="progress-wrapper-${mac}">
+                        <div class="progress-bar" id="progress-bar-${mac}">0%</div>
+                    </div>
+
+                    <div class="stat-grid">
+                        <div class="stat-box"><div class="stat-label">WiFi Signal</div><div id="rssi-${mac}" class="stat-value">-- dBm</div></div>
+                        <div class="stat-box"><div class="stat-label">Free RAM</div><div id="heap-${mac}" class="stat-value">-- KB</div></div>
+                        <div class="stat-box"><div class="stat-label">Uptime</div><div id="uptime-${mac}" class="stat-value">--</div></div>
+                        <div class="stat-box"><div class="stat-label">Last Ping</div><div id="time-${mac}" class="stat-value">--</div></div>
+                    </div>
+                    <div class="control-panel">
+                        <div class="btn-group">
+                            <button class="btn" style="background-color: #475569;" onclick="openConsoleModal('${mac}')" title="Console">⚙️</button>
+                            <button class="btn" style="background-color: var(--updating);" onclick="openOtaModal('${mac}')">☁️ OTA</button>
+                            <button class="btn btn-warning" onclick="restartNode('${mac}')" title="Reboot">↻</button>
+                            <button class="btn btn-danger" onclick="removeNode('${mac}')" title="Remove">✖</button>
+                        </div>
+                    </div>
+                </div>
+            `);
+            
+            applyFilterVisually();
+        }
+
+        function registerZone(zoneName) {
+            if (!knownZones.has(zoneName) && zoneName !== "unknown") {
+                knownZones.add(zoneName);
+                const container = document.getElementById('zone-filter-container');
+                const safeId = "btn-zone-" + zoneName.replace(/\s+/g, '-').toLowerCase();
+                container.insertAdjacentHTML('beforeend', `
+                    <button class="zone-btn" id="${safeId}" onclick="filterByZone('${zoneName}')">📍 ${zoneName}</button>
+                `);
+            }
+        }
+
+        function filterByZone(zoneName) {
+            currentActiveZone = zoneName;
+            document.querySelectorAll('.zone-btn').forEach(btn => btn.classList.remove('active'));
+            if(zoneName === 'all') {
+                document.getElementById('btn-zone-all').classList.add('active');
+                document.getElementById('current-view-title').innerText = "Overview: All Nodes";
+            } else {
+                const safeId = "btn-zone-" + zoneName.replace(/\s+/g, '-').toLowerCase();
+                document.getElementById(safeId).classList.add('active');
+                document.getElementById('current-view-title').innerText = `Zone: ${zoneName}`;
+            }
+            applyFilterVisually();
+        }
+
+        function applyFilterVisually() {
+            const cards = document.querySelectorAll('.node-card');
+            cards.forEach(card => {
+                if (currentActiveZone === 'all' || card.getAttribute('data-zone') === currentActiveZone) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        function updateStatusUI(mac, status) {
+            const card = document.getElementById(`card-${mac}`);
+            const badge = document.getElementById(`badge-${mac}`);
+            const progressWrapper = document.getElementById(`progress-wrapper-${mac}`);
+            const pBar = document.getElementById(`progress-bar-${mac}`);
+            
+            let displayStatus = status;
+            if (status === 'update_success') displayStatus = 'VERIFIED';
+            if (status === 'update_failed') displayStatus = 'FAILED';
+            badge.innerText = displayStatus;
+            
+            const colors = { 
+                'online': 'var(--online)', 'offline': 'var(--offline)', 
+                'updating': 'var(--updating)', 'rebooting': 'var(--updating)',
+                'update_success': 'var(--online)', 'update_failed': 'var(--offline)'
+            };
+            
+            card.style.borderTopColor = colors[status] || 'var(--text-dim)';
+            badge.style.color = colors[status] || 'white';
+
+            if (['updating', 'update_success', 'update_failed'].includes(status.toLowerCase())) {
+                progressWrapper.style.display = 'block';
+                
+                if (status === 'update_success') {
+                    pBar.style.width = '100%';
+                    pBar.style.backgroundColor = 'var(--online)';
+                    pBar.innerText = 'Success! Rebooting...';
+                } else if (status === 'update_failed') {
+                    pBar.style.width = '100%';
+                    pBar.style.backgroundColor = 'var(--offline)';
+                    pBar.innerText = 'Checksum/Update Failed!';
+                } else {
+                    pBar.style.backgroundColor = 'var(--updating)';
+                }
+            } else {
+                progressWrapper.style.display = 'none';
+                pBar.style.width = '0%';
+                pBar.innerText = '0%';
+                pBar.style.backgroundColor = 'var(--updating)';
+            }
+        }
+
+        function updateTelemetryUI(mac, data) {
+            if (data.device_name) document.getElementById(`name-${mac}`).innerText = data.device_name;
+            if (data.wifi_rssi) document.getElementById(`rssi-${mac}`).innerText = data.wifi_rssi + ' dBm';
+            
+            if (data.version) {
+                document.getElementById(`fw-${mac}`).innerText = `v${data.version}`;
+            }
+
+            if (data.heap) {
+                const freeKb = (data.heap / 1024).toFixed(1);
+                const totalHeap = data.total_heap || 327680; 
+                const percent = Math.round((data.heap / totalHeap) * 100);
+                document.getElementById(`heap-${mac}`).innerText = `${freeKb} KB (${percent}%)`;
+            }
+
+            if (data.uptime_sec !== undefined) {
+                const h = Math.floor(data.uptime_sec / 3600);
+                const m = Math.floor((data.uptime_sec % 3600) / 60);
+                document.getElementById(`uptime-${mac}`).innerText = `${h}h ${m}m`;
+            }
+            if (data.zone) {
+                const card = document.getElementById(`card-${mac}`);
+                card.setAttribute('data-zone', data.zone);
+                document.getElementById(`zone-tag-${mac}`).innerText = `ZONE: ${data.zone.toUpperCase()}`;
+                applyFilterVisually(); 
+            }
+
+            if (data.progress !== undefined) {
+                const badgeText = document.getElementById(`badge-${mac}`).innerText.toLowerCase();
+                if (badgeText === 'updating') {
+                    const pBar = document.getElementById(`progress-bar-${mac}`);
+                    pBar.style.width = `${data.progress}%`;
+                    pBar.innerText = `${data.progress}%`;
+                }
+            }
+        }
+
+        function openConsoleModal(mac) {
+            activeMacForConsole = mac;
+            const nodeName = document.getElementById(`name-${mac}`).innerText;
+            document.getElementById('modalTitle').innerText = `${nodeName} Console`;
+            document.getElementById('topicList').innerText = `nodes/${mac}/#`;
+            loadCommandHistory(mac);
+            document.getElementById('nodeModal').style.display = 'block';
+            client.subscribe(`nodes/${mac}/#`);
+        }
+
+        function closeConsoleModal() {
+            if (activeMacForConsole) { client.unsubscribe(`nodes/${activeMacForConsole}/#`); }
+            document.getElementById('nodeModal').style.display = 'none';
+            activeMacForConsole = null;
+        }
+
+        function openOtaModal(mac) {
+            activeMacForOta = mac;
+            document.getElementById('otaTargetName').innerText = document.getElementById(`name-${mac}`).innerText;
+            document.getElementById('otaTargetMac').innerText = mac;
+            document.getElementById('modalOtaUrl').value = "";
+            document.getElementById('modalOtaMd5').value = "";
+            document.getElementById('otaModal').style.display = 'block';
+        }
+
+        function closeOtaModal() {
+            document.getElementById('otaModal').style.display = 'none';
+            activeMacForOta = null;
+        }
+
+        function sendOTAFromModal() {
+            if (!activeMacForOta) return;
+            const url = document.getElementById('modalOtaUrl').value.trim();
+            const md5 = document.getElementById('modalOtaMd5').value.trim();
+            
+            if(!url) {
+                alert("Please provide a firmware URL.");
+                return;
+            }
+            
+            const payload = md5 ? `UPDATE:${url}|${md5}` : `UPDATE:${url}`;
+            client.publish(`nodes/${activeMacForOta}/cmd`, payload, {qos: 1});
+            
+            updateStatusUI(activeMacForOta, 'updating');
+            closeOtaModal();
+        }
+
+        function restartNode(mac) {
+            const nodeName = document.getElementById(`name-${mac}`).innerText;
+            if (confirm(`Are you sure you want to reboot ${nodeName} (${mac})?`)) {
+                client.publish(`nodes/${mac}/cmd`, `RESTART`, {qos: 1});
+            }
+        }
+
+        function removeNode(mac) {
+            if (!confirm(`Are you sure you want to permanently delete node ${mac}?`)) return;
+            const card = document.getElementById(`card-${mac}`);
+            if(card) {
+                client.publish(`nodes/${mac}/status`, '', { retain: true, qos: 1 });
+                localStorage.removeItem(`cmd_hist_${mac}`);
+                card.style.opacity = '0';
+                setTimeout(() => card.remove(), 300);
+            }
+        }
+
+        function loadCommandHistory(mac) {
+            const history = JSON.parse(localStorage.getItem(`cmd_hist_${mac}`)) || [];
+            const logs = document.getElementById('liveLogs');
+            logs.innerHTML = history.join('<br>');
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function saveCommandToHistory(mac, topic, msgStr) {
+            const timeStr = new Date().toLocaleTimeString();
+            const entry = `<span class="log-time">[${timeStr}]</span> <span class="log-topic">${topic}</span> : ${msgStr}`;
+            let history = JSON.parse(localStorage.getItem(`cmd_hist_${mac}`)) || [];
+            history.push(entry);
+            
+            if (history.length > 100) history.shift(); 
+            localStorage.setItem(`cmd_hist_${mac}`, JSON.stringify(history));
+        }
+
+        function sendCustomCommand() {
+            const cmdInput = document.getElementById('customCmd');
+            const cmd = cmdInput.value.trim();
+            if(!cmd || !activeMacForConsole) return;
+            client.publish(`nodes/${activeMacForConsole}/cmd`, cmd, {qos: 1});
+            cmdInput.value = ""; 
+        }
+
+        function clearLogs() {
+            if (!activeMacForConsole) return;
+            if (confirm("Clear local console history for this device?")) {
+                localStorage.removeItem(`cmd_hist_${activeMacForConsole}`);
+                document.getElementById('liveLogs').innerHTML = "";
+            }
+        }
+
+        document.addEventListener('dragover', (e) => {
+            if (e.target.classList.contains('input-md5')) {
+                e.preventDefault();
+                e.target.style.border = '1px dashed var(--accent)';
+            }
+        });
+
+        document.addEventListener('dragleave', (e) => {
+            if (e.target.classList.contains('input-md5')) {
+                e.preventDefault();
+                e.target.style.border = '1px solid #334155';
+            }
+        });
+
+        document.addEventListener('drop', (e) => {
+            if (e.target.classList.contains('input-md5')) {
+                e.preventDefault();
+                e.target.style.border = '1px solid #334155';
+                
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    e.target.value = "Calculating...";
+                    
+                    // --- NEW: Auto-construct the URL from Base + Filename ---
+                    let baseUrl = document.getElementById('modalOtaBaseUrl').value.trim();
+                    if (baseUrl) {
+                        // Ensure there is a trailing slash before appending filename
+                        if (!baseUrl.endsWith('/')) {
+                            baseUrl += '/';
+                        }
+                        document.getElementById('modalOtaUrl').value = baseUrl + file.name;
+                    } else {
+                        // Fallback to just the filename if no base URL is set
+                        document.getElementById('modalOtaUrl').value = file.name;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        const hash = SparkMD5.ArrayBuffer.hash(event.target.result);
+                        e.target.value = hash;
+                    };
+                    reader.readAsArrayBuffer(file);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
